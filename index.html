@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warnetwork LLM</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;background:#0b0d10;color:#e6e6e6;display:flex;flex-direction:column;height:100vh;}
+  #topbar{padding:.6rem 1rem;font-size:.8rem;color:#9aa0a6;border-bottom:1px solid #22262b;display:flex;justify-content:space-between;align-items:center;}
+  #who{color:#8ac1ff;}
+  #log{flex:1;overflow-y:auto;padding:1rem;}
+  .msg{margin-bottom:.75rem;line-height:1.4;white-space:pre-wrap;}
+  .user{color:#8ac1ff;}
+  .bot{color:#e6e6e6;}
+  #inputRow{display:flex;padding:.75rem;border-top:1px solid #22262b;gap:.5rem;}
+  #inputRow input{flex:1;padding:.6rem;border-radius:.4rem;border:1px solid #333;background:#15181c;color:#fff;}
+  #inputRow button{padding:.6rem 1rem;border-radius:.4rem;border:none;background:#2563eb;color:#fff;}
+  #inputRow button:disabled{background:#444;}
+  #gate{position:fixed;inset:0;background:#0b0d10;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:.75rem;padding:1.5rem;text-align:center;}
+  #gate input{padding:.7rem;border-radius:.4rem;border:1px solid #333;background:#15181c;color:#fff;width:220px;}
+  #gate button{padding:.7rem 1.2rem;border-radius:.4rem;border:none;background:#2563eb;color:#fff;}
+  #gateErr{color:#ff6b6b;font-size:.85rem;min-height:1.2em;}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <h2 style="margin:0;">Who's this?</h2>
+  <p style="color:#9aa0a6;max-width:320px;margin:0;">Pick a username so I can remember our conversations. This isn't a password — just a name to recognize you by.</p>
+  <input id="gateInput" placeholder="e.g. jason" maxlength="32" autocomplete="off">
+  <button id="gateBtn">Continue</button>
+  <div id="gateErr"></div>
+</div>
+
+<div id="topbar" style="display:none;">
+  <span>Warnetwork LLM</span>
+  <span id="who"></span>
+</div>
+<div id="log" style="display:none;"></div>
+<div id="inputRow" style="display:none;">
+  <input id="input" placeholder="Type a message…">
+  <button id="send">Send</button>
+</div>
+
+<script>
+const logEl = document.getElementById("log");
+const inputEl = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+const topbar = document.getElementById("topbar");
+const whoEl = document.getElementById("who");
+const gate = document.getElementById("gate");
+const gateInput = document.getElementById("gateInput");
+const gateBtn = document.getElementById("gateBtn");
+const gateErr = document.getElementById("gateErr");
+
+const history = [];
+
+function addMsg(role, text) {
+  const div = document.createElement("div");
+  div.className = "msg " + (role === "user" ? "user" : "bot");
+  div.textContent = (role === "user" ? "You: " : "AI: ") + text;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+  return div;
+}
+
+function getUrlUsername() {
+  return new URL(location.href).searchParams.get("u");
+}
+
+async function enterAs(username) {
+  const res = await fetch("/api/identify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    gateErr.textContent = data.error || "Something went wrong.";
+    return;
+  }
+  localStorage.setItem("warnetwork_username", data.username);
+  const url = new URL(location.href);
+  url.searchParams.set("u", data.username);
+  history_pushUrl(url);
+  startChat(data.username);
+}
+
+function history_pushUrl(url) {
+  window.history.replaceState(null, "", url.toString());
+}
+
+async function startChat(username) {
+  gate.style.display = "none";
+  topbar.style.display = "flex";
+  logEl.style.display = "block";
+  document.getElementById("inputRow").style.display = "flex";
+  whoEl.textContent = username;
+
+  // Load this user's private history
+  const res = await fetch(`/api/history?u=${encodeURIComponent(username)}`);
+  if (res.ok) {
+    const data = await res.json();
+    for (const m of data.messages) {
+      history.push({ role: m.role, content: m.content });
+      addMsg(m.role, m.content);
+    }
+    if (data.messages.length) {
+      addMsg("bot", `— welcome back, ${username} —`);
+    }
+  }
+
+  inputEl.focus();
+}
+
+async function send() {
+  const username = getUrlUsername();
+  const text = inputEl.value.trim();
+  if (!text || !username) return;
+  inputEl.value = "";
+  sendBtn.disabled = true;
+  addMsg("user", text);
+  history.push({ role: "user", content: text });
+
+  const botDiv = addMsg("bot", "");
+  try {
+    const res = await fetch(`/api/chat?u=${encodeURIComponent(username)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: history }),
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let full = "";
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === "[DONE]") continue;
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.response) {
+            full += parsed.response;
+            botDiv.textContent = "AI: " + full;
+            logEl.scrollTop = logEl.scrollHeight;
+          }
+        } catch {}
+      }
+    }
+    history.push({ role: "assistant", content: full });
+  } catch (e) {
+    botDiv.textContent = "AI: (error getting a response)";
+  }
+  sendBtn.disabled = false;
+  inputEl.focus();
+}
+
+sendBtn.addEventListener("click", send);
+inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+gateBtn.addEventListener("click", () => enterAs(gateInput.value));
+gateInput.addEventListener("keydown", (e) => { if (e.key === "Enter") enterAs(gateInput.value); });
+
+// Recognize returning visitors: URL param first, then localStorage fallback
+(function init() {
+  const fromUrl = getUrlUsername();
+  if (fromUrl) {
+    enterAs(fromUrl);
+    return;
+  }
+  const stored = localStorage.getItem("warnetwork_username");
+  if (stored) {
+    const url = new URL(location.href);
+    url.searchParams.set("u", stored);
+    history_pushUrl(url);
+    enterAs(stored);
+    return;
+  }
+  gateInput.focus();
+})();
+</script>
+</body>
+</html>

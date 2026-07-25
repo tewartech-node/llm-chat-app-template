@@ -4,10 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Warnetwork LLM</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   body{font-family:system-ui,sans-serif;margin:0;background:#0b0d10;color:#e6e6e6;display:flex;flex-direction:column;height:100vh;}
   #topbar{padding:.6rem 1rem;font-size:.8rem;color:#9aa0a6;border-bottom:1px solid #22262b;display:flex;justify-content:space-between;align-items:center;}
   #who{color:#8ac1ff;}
+  #signOut{background:none;border:none;color:#9aa0a6;text-decoration:underline;cursor:pointer;font-size:.8rem;padding:0;margin-left:.75rem;}
   #log{flex:1;overflow-y:auto;padding:1rem;}
   .msg{margin-bottom:.75rem;line-height:1.4;white-space:pre-wrap;}
   .user{color:#8ac1ff;}
@@ -17,24 +19,21 @@
   #inputRow button{padding:.6rem 1rem;border-radius:.4rem;border:none;background:#2563eb;color:#fff;}
   #inputRow button:disabled{background:#444;}
   #gate{position:fixed;inset:0;background:#0b0d10;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:.75rem;padding:1.5rem;text-align:center;}
-  #gate input{padding:.7rem;border-radius:.4rem;border:1px solid #333;background:#15181c;color:#fff;width:220px;}
-  #gate button{padding:.7rem 1.2rem;border-radius:.4rem;border:none;background:#2563eb;color:#fff;}
   #gateErr{color:#ff6b6b;font-size:.85rem;min-height:1.2em;}
 </style>
 </head>
 <body>
 
 <div id="gate">
-  <h2 style="margin:0;">Who's this?</h2>
-  <p style="color:#9aa0a6;max-width:320px;margin:0;">Pick a username so I can remember our conversations. This isn't a password — just a name to recognize you by.</p>
-  <input id="gateInput" placeholder="e.g. jason" maxlength="32" autocomplete="off">
-  <button id="gateBtn">Continue</button>
+  <h2 style="margin:0;">Sign in to chat</h2>
+  <p style="color:#9aa0a6;max-width:320px;margin:0;">We use your Google account to keep your conversations and memories private to you.</p>
+  <div id="g_id_signin"></div>
   <div id="gateErr"></div>
 </div>
 
 <div id="topbar" style="display:none;">
   <span>Warnetwork LLM</span>
-  <span id="who"></span>
+  <span><span id="who"></span><button id="signOut">Sign out</button></span>
 </div>
 <div id="log" style="display:none;"></div>
 <div id="inputRow" style="display:none;">
@@ -48,10 +47,13 @@ const inputEl = document.getElementById("input");
 const sendBtn = document.getElementById("send");
 const topbar = document.getElementById("topbar");
 const whoEl = document.getElementById("who");
+const signOutBtn = document.getElementById("signOut");
 const gate = document.getElementById("gate");
-const gateInput = document.getElementById("gateInput");
-const gateBtn = document.getElementById("gateBtn");
 const gateErr = document.getElementById("gateErr");
+
+// Public OAuth Web Client ID from Google Cloud Console (not a secret).
+// Must match the GOOGLE_CLIENT_ID var in wrangler.jsonc.
+const GOOGLE_CLIENT_ID = "REPLACE_WITH_YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com";
 
 const history = [];
 
@@ -64,30 +66,29 @@ function addMsg(role, text) {
   return div;
 }
 
-function getUrlUsername() {
-  return new URL(location.href).searchParams.get("u");
-}
-
-async function enterAs(username) {
-  const res = await fetch("/api/identify", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ username }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    gateErr.textContent = data.error || "Something went wrong.";
-    return;
+async function handleCredentialResponse(response) {
+  gateErr.textContent = "";
+  try {
+    const res = await fetch("/api/auth/google", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential: response.credential }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      gateErr.textContent = data.error || "Sign-in failed.";
+      return;
+    }
+    startChat(data.username);
+  } catch (e) {
+    gateErr.textContent = "Sign-in failed.";
   }
-  localStorage.setItem("warnetwork_username", data.username);
-  const url = new URL(location.href);
-  url.searchParams.set("u", data.username);
-  history_pushUrl(url);
-  startChat(data.username);
 }
 
-function history_pushUrl(url) {
-  window.history.replaceState(null, "", url.toString());
+async function signOut() {
+  await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+  location.reload();
 }
 
 async function startChat(username) {
@@ -97,8 +98,8 @@ async function startChat(username) {
   document.getElementById("inputRow").style.display = "flex";
   whoEl.textContent = username;
 
-  // Load this user's private history
-  const res = await fetch(`/api/history?u=${encodeURIComponent(username)}`);
+  // Load this user's private history (identity comes from the session cookie)
+  const res = await fetch("/api/history", { credentials: "same-origin" });
   if (res.ok) {
     const data = await res.json();
     for (const m of data.messages) {
@@ -114,9 +115,8 @@ async function startChat(username) {
 }
 
 async function send() {
-  const username = getUrlUsername();
   const text = inputEl.value.trim();
-  if (!text || !username) return;
+  if (!text) return;
   inputEl.value = "";
   sendBtn.disabled = true;
   addMsg("user", text);
@@ -124,11 +124,17 @@ async function send() {
 
   const botDiv = addMsg("bot", "");
   try {
-    const res = await fetch(`/api/chat?u=${encodeURIComponent(username)}`, {
+    const res = await fetch("/api/chat", {
       method: "POST",
+      credentials: "same-origin",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ messages: history }),
     });
+    if (res.status === 401) {
+      botDiv.textContent = "AI: (session expired — please sign in again)";
+      sendBtn.disabled = false;
+      return;
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let full = "";
@@ -164,25 +170,26 @@ async function send() {
 
 sendBtn.addEventListener("click", send);
 inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
-gateBtn.addEventListener("click", () => enterAs(gateInput.value));
-gateInput.addEventListener("keydown", (e) => { if (e.key === "Enter") enterAs(gateInput.value); });
+signOutBtn.addEventListener("click", signOut);
 
-// Recognize returning visitors: URL param first, then localStorage fallback
-(function init() {
-  const fromUrl = getUrlUsername();
-  if (fromUrl) {
-    enterAs(fromUrl);
+(async function init() {
+  const res = await fetch("/api/me", { credentials: "same-origin" });
+  if (res.ok) {
+    const data = await res.json();
+    startChat(data.username);
     return;
   }
-  const stored = localStorage.getItem("warnetwork_username");
-  if (stored) {
-    const url = new URL(location.href);
-    url.searchParams.set("u", stored);
-    history_pushUrl(url);
-    enterAs(stored);
-    return;
-  }
-  gateInput.focus();
+  window.onload = () => {
+    if (!window.google) return;
+    google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: handleCredentialResponse,
+    });
+    google.accounts.id.renderButton(document.getElementById("g_id_signin"), {
+      theme: "outline",
+      size: "large",
+    });
+  };
 })();
 </script>
 </body>

@@ -146,6 +146,10 @@ The default system prompt can be changed by updating the `SYSTEM_PROMPT` constan
 
 The UI styling is contained in the `<style>` section of `public/index.html`. You can modify the CSS variables at the top to quickly change the color scheme.
 
+## Possible future work
+
+Memory recall today runs on Workers AI embeddings + Vectorize (see `MEMORY_INDEX` in `wrangler.jsonc`), which is the semantic-search equivalent achievable inside a Cloudflare Worker. A genuinely custom-trained model isn't something a Worker can run or train — that would mean a separate service outside this repo, built with a training stack such as [TensorFlow](https://www.tensorflow.org/), [PyTorch](https://pytorch.org/), [Keras](https://keras.io/), Hugging Face [Transformers](https://huggingface.co/docs/transformers/), or [NLTK](https://www.nltk.org/) for text preprocessing.
+
 ## Resources
 
 - [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)

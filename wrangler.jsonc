@@ -30,7 +30,7 @@
   "vars": {
     // Public OAuth Web Client ID from Google Cloud Console (not a secret — checked
     // against the `aud` claim of incoming ID tokens). Replace before deploying.
-    "GOOGLE_CLIENT_ID": "REPLACE_WITH_YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com"
+    "GOOGLE_CLIENT_ID": "1034434258543-1ae27iai1tuco327ig8m1v7h8vqurvcu.apps.googleusercontent.com"
   },
   "upload_source_maps": true
 }

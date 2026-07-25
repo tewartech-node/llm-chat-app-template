@@ -21,5 +21,11 @@
       "database_id": "ec7041ac-1c54-4f88-8696-26947d121590"
     }
   ],
+  "vectorize": [
+    {
+      "binding": "MEMORY_INDEX",
+      "index_name": "warnetworkllm-memories"
+    }
+  ],
   "upload_source_maps": true
 }

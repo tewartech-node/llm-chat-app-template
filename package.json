@@ -1,5 +1,5 @@
 {
-	"name": "llm-chat-app-template",
+	"name": "cloudhub",
 	"description": "A simple chat application powered by Cloudflare Workers AI",
 	"cloudflare": {
 		"label": "LLM Chat App",

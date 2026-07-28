@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Warnetwork LLM</title>
+<title>ServTech-v2</title>
 <style>
   body{font-family:system-ui,sans-serif;margin:0;background:#0b0d10;color:#e6e6e6;display:flex;flex-direction:column;height:100vh;}
   #topbar{padding:.6rem 1rem;font-size:.8rem;color:#9aa0a6;border-bottom:1px solid #22262b;display:flex;justify-content:space-between;align-items:center;}
@@ -33,7 +33,7 @@
 </div>
 
 <div id="topbar" style="display:none;">
-  <span>Warnetwork LLM</span>
+  <span>ServTech-v2</span>
   <span id="who"></span>
 </div>
 <div id="log" style="display:none;"></div>
@@ -79,7 +79,7 @@ async function enterAs(username) {
     gateErr.textContent = data.error || "Something went wrong.";
     return;
   }
-  localStorage.setItem("warnetwork_username", data.username);
+  localStorage.setItem("servtechllmv2_username", data.username);
   const url = new URL(location.href);
   url.searchParams.set("u", data.username);
   history_pushUrl(url);
@@ -174,7 +174,7 @@ gateInput.addEventListener("keydown", (e) => { if (e.key === "Enter") enterAs(ga
     enterAs(fromUrl);
     return;
   }
-  const stored = localStorage.getItem("warnetwork_username");
+  const stored = localStorage.getItem("servtechllmv2_username");
   if (stored) {
     const url = new URL(location.href);
     url.searchParams.set("u", stored);

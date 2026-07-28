@@ -25,5 +25,12 @@
   // ServTech-v2) but isn't bound here — this app has no upload feature, so
   // there's nothing for an R2 binding to do yet. Add an r2_buckets entry if
   // that changes.
+  // Attaches testllm.warnetwork.cloud directly to this Worker (DNS + SSL
+  // auto-provisioned by Cloudflare). warnetwork.cloud's zone already exists
+  // in this account, so unlike servtechworker's warnetwork.online this
+  // should attach cleanly on the next deploy with no zone setup needed.
+  "routes": [
+    { "pattern": "testllm.warnetwork.cloud", "custom_domain": true }
+  ],
   "upload_source_maps": true
 }

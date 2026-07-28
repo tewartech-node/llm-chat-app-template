@@ -1,6 +1,6 @@
 {
-	"name": "llm-chat-app-template",
-	"description": "A simple chat application powered by Cloudflare Workers AI",
+	"name": "servtechllmv2",
+	"description": "ServTech-v2 — no-auth demo chat application powered by Cloudflare Workers AI",
 	"cloudflare": {
 		"label": "LLM Chat App",
 		"products": [

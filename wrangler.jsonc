@@ -17,8 +17,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "warnetworkllm-db",
-      "database_id": "ec7041ac-1c54-4f88-8696-26947d121590"
+      "database_name": "llm-chat-app-template-db",
+      "database_id": "731ca0e1-69cc-4d5a-92b6-5232d9c69ab3"
     }
   ],
   "upload_source_maps": true

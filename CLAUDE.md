@@ -29,11 +29,13 @@ This is a single Cloudflare Worker (`src/index.ts`, `main` in `wrangler.jsonc`) 
 **Bindings** (`wrangler.jsonc`):
 - `AI` — Workers AI, used to run the chat model
 - `ASSETS` — static file serving from `./public`
-- `DB` — D1 database `warnetworkllm-db`
+- `DB` — D1 database `llm-chat-app-template-db`
 
 The `Env` interface is hand-written in `src/types.ts` (not the generated global `Env` in `worker-configuration.d.ts`, which only declares `AI`/`ASSETS` and is stale relative to the D1 binding — re-run `npm run cf-typegen` and reconcile with `src/types.ts` if bindings change).
 
-**D1 schema** (`warnetworkllm-db`) is not tracked anywhere in this repo (no migrations directory) — it exists only as tables referenced ad hoc from `src/index.ts`: `users`, `messages`, `memories`, `shared_knowledge`. Any schema change has to be applied directly against the D1 database and is invisible to git history.
+**D1 schema** (`llm-chat-app-template-db`) is not tracked anywhere in this repo (no migrations directory) — it exists only as tables referenced ad hoc from `src/index.ts`: `users`, `messages`, `memories`, `shared_knowledge`. Any schema change has to be applied directly against the D1 database and is invisible to git history.
+
+**Do not point this Worker's `DB` binding at `warnetworkllm-db`.** That database now backs the separate, authenticated `warnetworkllm` app (password accounts, sessions, uploads) — this app's schema is incompatible with it (this app expects `username`/`session_id` columns; the real one uses `user_id` foreign keys) and its identity model has no auth at all, so sharing the database would let anyone read/write another app's user data through a `?u=<guessed-username>` query param. This app has its own dedicated, isolated database now — keep it that way.
 
 **Identity model**: there is no auth. A user is just a normalized username (`normalizeUsername`: lowercase, 2-32 chars, `[a-z0-9_-]`) passed as the `?u=` query param on every API call, echoed into `localStorage` client-side, and upserted into the `users` table via `ensureUser`. Anyone who knows/guesses a username can read its history and memories — treat this as a demo-grade identity scheme, not a security boundary.
 

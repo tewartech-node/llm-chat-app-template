@@ -10,6 +10,11 @@ const actions: ActionSpec[] = [
   { name: "updateFile", requiredParams: ["owner", "repo", "path", "content", "message"] },
   { name: "createPR", requiredParams: ["owner", "repo", "title", "head", "base"] },
   { name: "triggerWorkflow", requiredParams: ["owner", "repo", "workflowId", "ref"] },
+  { name: "createBranch", requiredParams: ["owner", "repo", "branch", "fromBranch"] },
+  { name: "getPRChecks", requiredParams: ["owner", "repo", "pullNumber"] },
+  // Merging to main ships code to production via the deploy workflow, so it
+  // carries the same weight as any other destructive action.
+  { name: "mergePR", requiredParams: ["owner", "repo", "pullNumber"], destructive: true },
 ];
 
 async function getClient(env: Env): Promise<Octokit | null> {
@@ -102,6 +107,54 @@ export const githubConnector: Connector = {
             inputs: (params.inputs as Record<string, string>) ?? undefined,
           });
           return ok({ dispatched: true });
+        }
+        case "createBranch": {
+          const { data: ref } = await client.git.getRef({
+            owner: String(params.owner),
+            repo: String(params.repo),
+            ref: `heads/${params.fromBranch}`,
+          });
+          const { data } = await client.git.createRef({
+            owner: String(params.owner),
+            repo: String(params.repo),
+            ref: `refs/heads/${params.branch}`,
+            sha: ref.object.sha,
+          });
+          return ok({ ref: data.ref, sha: data.object.sha });
+        }
+        case "getPRChecks": {
+          const { data: pr } = await client.pulls.get({
+            owner: String(params.owner),
+            repo: String(params.repo),
+            pull_number: Number(params.pullNumber),
+          });
+          const { data: checks } = await client.checks.listForRef({
+            owner: String(params.owner),
+            repo: String(params.repo),
+            ref: pr.head.sha,
+          });
+          const runs = checks.check_runs.map((c) => ({
+            name: c.name,
+            status: c.status,
+            conclusion: c.conclusion,
+          }));
+          return ok({
+            mergeable: pr.mergeable,
+            mergeableState: pr.mergeable_state,
+            checks: runs,
+            allComplete: runs.length > 0 && runs.every((c) => c.status === "completed"),
+            allPassed: runs.length > 0 && runs.every((c) => c.conclusion === "success"),
+          });
+        }
+        case "mergePR": {
+          if (params.confirmed !== true) return fail("mergePR requires params.confirmed = true");
+          const { data } = await client.pulls.merge({
+            owner: String(params.owner),
+            repo: String(params.repo),
+            pull_number: Number(params.pullNumber),
+            merge_method: "squash",
+          });
+          return ok({ merged: data.merged, sha: data.sha });
         }
         default:
           return fail(`Unhandled action "${action}"`);

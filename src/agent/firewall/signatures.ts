@@ -47,8 +47,15 @@ function markerMatches(pattern: string, context: Record<string, unknown>): boole
       if (Number.isNaN(threshold)) return false;
       return Number(context.attempts ?? 0) >= threshold;
     }
-    case "csrf_token":
-      return value === "missing" ? context.csrfToken === undefined || context.csrfToken === null : false;
+    case "csrf_token": {
+      if (value !== "missing") return false;
+      // Absence of a CSRF token only means anything on a state-changing
+      // request. Without this guard the marker fires on every GET and every
+      // non-form request — a 100% false-positive rate, which the pentest
+      // suite caught. "Missing" is not suspicious unless one was required.
+      if (!context.stateChanging) return false;
+      return context.csrfToken === undefined || context.csrfToken === null;
+    }
     case "rate":
       return Number(context.requestsPerMinute ?? 0) >= Number(/(\d+)/.exec(value)?.[1] ?? Infinity);
     default:

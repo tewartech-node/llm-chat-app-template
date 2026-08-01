@@ -1,6 +1,6 @@
 import { Env } from "../../types";
 import { executeConnectorAction } from "../../connectors/index";
-import { bestScore, loadSignatures, match } from "./signatures";
+import { Signature, bestScore, loadSignatures, match } from "./signatures";
 import { ThresholdLevel, ThresholdMap, adaptationMultiplier, loadThresholds, thresholdFor } from "./learning";
 
 /**
@@ -32,6 +32,9 @@ export interface RequestContext {
   unusualHeader?: boolean;
   suspiciousTiming?: boolean;
   attempts?: number;
+  /** True for POST/PUT/PATCH/DELETE. Required before a missing CSRF token
+   *  means anything — see the csrf_token marker in signatures.ts. */
+  stateChanging?: boolean;
   csrfToken?: string | null;
   requestsPerMinute?: number;
 }
@@ -51,7 +54,7 @@ function anomalyScore(text: string, ctx: RequestContext): number {
   return Math.min(1, score);
 }
 
-function classify(score: number, attackType: string | null, thresholds: ThresholdMap): ThreatLevel {
+export function classify(score: number, attackType: string | null, thresholds: ThresholdMap): ThreatLevel {
   const at = (level: ThresholdLevel) => thresholdFor(thresholds, attackType, level);
   if (score >= at("critical")) return "CRITICAL";
   if (score >= at("high")) return "HIGH";
@@ -59,11 +62,46 @@ function classify(score: number, attackType: string | null, thresholds: Threshol
   return "LOW";
 }
 
-function selectAction(level: ThreatLevel, confidence: number): DefenseAction {
+export function selectAction(level: ThreatLevel, confidence: number): DefenseAction {
   if (level === "CRITICAL") return "isolate";
   if (level === "HIGH") return confidence > 0.8 ? "block" : "challenge";
   if (level === "MEDIUM") return "throttle";
   return "allow";
+}
+
+/**
+ * The scoring core, with no I/O. Kept separate from analyze() so the
+ * block-rate and false-positive claims can actually be verified against the
+ * pentest corpus without standing up a database — a claim you can't test
+ * cheaply is a claim that quietly rots.
+ */
+export function scoreRequest(
+  signatures: Signature[],
+  text: string,
+  thresholds: ThresholdMap,
+  adaptationMultiplier: number,
+  attackType?: string,
+  ctx: RequestContext = {},
+): ThreatResult {
+  const started = Date.now();
+  const matches = match(signatures, text, attackType, ctx as Record<string, unknown>);
+  const signatureScore = bestScore(matches);
+
+  const raw = signatureScore + behaviouralScore(ctx) * 0.3 + anomalyScore(text, ctx) * 0.2;
+  const threatScore = Math.min(1, raw * adaptationMultiplier);
+
+  const detectedType = attackType ?? (matches.length ? matches[0].attackType : null);
+  const threatLevel = classify(threatScore, detectedType, thresholds);
+
+  return {
+    threatScore,
+    threatLevel,
+    confidence: signatureScore,
+    action: selectAction(threatLevel, signatureScore),
+    attackType: detectedType,
+    matchedSignatures: matches.length,
+    analysisMs: Date.now() - started,
+  };
 }
 
 /**
@@ -82,28 +120,12 @@ export async function analyze(
   attackType?: string,
   ctx: RequestContext = {},
 ): Promise<ThreatResult> {
-  const started = Date.now();
-
-  const signatures = await loadSignatures(env);
-  const matches = match(signatures, text, attackType, ctx as Record<string, unknown>);
-  const signatureScore = bestScore(matches);
-
-  const raw = signatureScore + behaviouralScore(ctx) * 0.3 + anomalyScore(text, ctx) * 0.2;
-  const threatScore = Math.min(1, raw * (await adaptationMultiplier(env)));
-
-  const detectedType = attackType ?? (matches.length ? matches[0].attackType : null);
-  const thresholds = await loadThresholds(env);
-  const threatLevel = classify(threatScore, detectedType, thresholds);
-
-  return {
-    threatScore,
-    threatLevel,
-    confidence: signatureScore,
-    action: selectAction(threatLevel, signatureScore),
-    attackType: detectedType,
-    matchedSignatures: matches.length,
-    analysisMs: Date.now() - started,
-  };
+  const [signatures, thresholds, multiplier] = await Promise.all([
+    loadSignatures(env),
+    loadThresholds(env),
+    adaptationMultiplier(env),
+  ]);
+  return scoreRequest(signatures, text, thresholds, multiplier, attackType, ctx);
 }
 
 /**

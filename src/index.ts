@@ -8,6 +8,13 @@ import {
   executeConnectorAction,
   getConnectorStatus,
 } from "./connectors/index";
+import { handleTask, runDueScheduledTasks } from "./agent/core";
+import {
+  engageKillSwitch,
+  isKillSwitchEngaged,
+  killSwitchReason,
+  releaseKillSwitch,
+} from "./agent/guardrails";
 
 const MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const SYSTEM_PROMPT =
@@ -63,9 +70,95 @@ export default {
       });
     }
 
+    if (url.pathname === "/api/agent/task" && request.method === "POST") {
+      return handleAgentTask(request, env);
+    }
+
+    if (url.pathname === "/api/agent/audit-log" && request.method === "GET") {
+      return handleAuditLog(env, url);
+    }
+
+    if (url.pathname === "/api/agent/learnings" && request.method === "GET") {
+      return handleLearnings(env);
+    }
+
+    if (url.pathname === "/api/agent/kill-switch") {
+      if (request.method === "GET") {
+        return json({
+          engaged: await isKillSwitchEngaged(env),
+          reason: await killSwitchReason(env),
+        });
+      }
+      if (request.method === "POST") {
+        const body = (await request.json().catch(() => ({}))) as { engage?: boolean; reason?: string };
+        if (body.engage) await engageKillSwitch(env, body.reason ?? "engaged via API");
+        else await releaseKillSwitch(env);
+        return json({ engaged: await isKillSwitchEngaged(env) });
+      }
+    }
+
     return new Response("Not found", { status: 404 });
   },
+
+  /**
+   * Cron-driven proactive work. Scheduled tasks run through the same
+   * handleTask() guardrail path as interactive requests — see agent/core.ts
+   * for why this is a Worker Cron Trigger rather than pg_cron.
+   */
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      runDueScheduledTasks(env).catch((e) => console.error("Scheduled task run failed:", e)),
+    );
+  },
 } satisfies ExportedHandler<Env>;
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function handleAgentTask(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    task?: string;
+    confirmed?: boolean;
+    dryRun?: boolean;
+    actor?: string;
+  };
+  if (!body.task) return json({ error: "task is required" }, 400);
+
+  const outcome = await handleTask(env, body.task, {
+    confirmed: body.confirmed,
+    dryRun: body.dryRun,
+    source: "api",
+    actor: body.actor,
+  });
+
+  return json(outcome, outcome.success ? 200 : 400);
+}
+
+async function handleAuditLog(env: Env, url: URL): Promise<Response> {
+  const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
+  const res = await executeConnectorAction(env, "supabase", "select", {
+    table: "agent_actions",
+    select: "id,task,decision,connector,action,result,success,cost,source,occurred_at",
+    order: "occurred_at.desc",
+    limit,
+  });
+  return json(res.success ? res.data : { error: res.error }, res.success ? 200 : 502);
+}
+
+async function handleLearnings(env: Env): Promise<Response> {
+  const res = await executeConnectorAction(env, "supabase", "select", {
+    table: "learned_patterns",
+    filters: { pattern_domain: "eq.agent" },
+    select: "pattern_name,pattern_description,confidence_score,success_rate,times_applied,times_successful",
+    order: "confidence_score.desc",
+    limit: 100,
+  });
+  return json(res.success ? res.data : { error: res.error }, res.success ? 200 : 502);
+}
 
 function normalizeUsername(raw: string | null): string | null {
   if (!raw) return null;

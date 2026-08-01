@@ -36,5 +36,10 @@
   "routes": [
     { "pattern": "testllm.warnetwork.cloud", "custom_domain": true }
   ],
+  // Drives scheduled_tasks through the agent's guardrail path (see
+  // src/agent/core.ts). Deliberately not pg_cron, which would bypass it.
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
   "upload_source_maps": true
 }

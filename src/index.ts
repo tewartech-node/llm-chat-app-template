@@ -12,6 +12,7 @@ import { handleTask, runDueScheduledTasks } from "./agent/core";
 import { buildHealthReport } from "./agent/health";
 import { keepaliveSupabase } from "./agent/quota";
 import { refreshCache } from "./agent/firewall/signatures";
+import { handleInboundEmail } from "./agent/email";
 import {
   engageKillSwitch,
   isKillSwitchEngaged,
@@ -133,6 +134,17 @@ export default {
         await refreshCache(env).catch((e) => console.error("Signature cache refresh failed:", e));
         await runDueScheduledTasks(env).catch((e) => console.error("Scheduled task run failed:", e));
       })(),
+    );
+  },
+
+  /**
+   * Inbound mail on mail.warnetwork.cloud. Delegates immediately — the
+   * sender allow-list and the "body is data, not instruction" rule both live
+   * in agent/email.ts, and commands run the normal guardrail chain.
+   */
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      handleInboundEmail(message, env).catch((e) => console.error("Inbound email failed:", e)),
     );
   },
 } satisfies ExportedHandler<Env>;

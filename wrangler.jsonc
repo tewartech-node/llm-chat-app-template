@@ -29,6 +29,14 @@
   "r2_buckets": [
     { "binding": "BACKUP", "bucket_name": "warnetech-server-backup" }
   ],
+  // Outbound mail on mail.warnetwork.cloud. Requires the domain to be
+  // onboarded under Email Service with SPF/DKIM records added, and each
+  // destination address verified in Email Routing. Inbound is wired
+  // separately via an Email Routing rule pointing at this Worker, which the
+  // `email` handler in src/index.ts receives.
+  "send_email": [
+    { "name": "EMAIL" }
+  ],
   // Attaches testllm.warnetwork.cloud directly to this Worker (DNS + SSL
   // auto-provisioned by Cloudflare). warnetwork.cloud's zone already exists
   // in this account, so this should attach cleanly on the next deploy with

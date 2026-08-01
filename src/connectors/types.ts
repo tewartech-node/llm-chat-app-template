@@ -1,6 +1,6 @@
 import { Env } from "../types";
 
-export type ConnectorName = "github" | "google-drive" | "aws" | "shell" | "d1";
+export type ConnectorName = "github" | "google-drive" | "aws" | "shell" | "d1" | "supabase" | "huggingface";
 
 export interface ConnectorActionResult {
   success: boolean;

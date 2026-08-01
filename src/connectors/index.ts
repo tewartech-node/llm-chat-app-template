@@ -5,6 +5,8 @@ import { githubConnector } from "./github";
 import { googleDriveConnector } from "./google-drive";
 import { awsConnector } from "./aws";
 import { shellConnector } from "./shell";
+import { supabaseConnector } from "./supabase";
+import { huggingFaceConnector } from "./huggingface";
 import { storeCredential, deleteCredential } from "../vault";
 
 const registry: Record<ConnectorName, Connector> = {
@@ -13,6 +15,8 @@ const registry: Record<ConnectorName, Connector> = {
   "google-drive": googleDriveConnector,
   aws: awsConnector,
   shell: shellConnector,
+  supabase: supabaseConnector,
+  huggingface: huggingFaceConnector,
 };
 
 export function getConnector(name: string): Connector | null {

@@ -34,5 +34,9 @@
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest"
+	},
+	"dependencies": {
+		"@octokit/rest": "^22.0.1",
+		"aws4fetch": "^1.0.20"
 	}
 }

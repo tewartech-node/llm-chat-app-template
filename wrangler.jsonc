@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "servtechllmv2worker",
+  "name": "warnetech-server-worker",
   "main": "src/index.ts",
   "compatibility_date": "2025-10-08",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
@@ -17,18 +17,22 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "servtechllmv2db",
-      "database_id": "24b91c9b-290b-4b73-ac11-24a695fb6182"
+      "database_name": "warnetech-server-data",
+      "database_id": "f347b59b-bf32-451c-ae81-2c87182ee364"
     }
   ],
-  // servtechllmv2r2 exists (created for naming-scheme parity with the rest of
-  // ServTech-v2) but isn't bound here — this app has no upload feature, so
-  // there's nothing for an R2 binding to do yet. Add an r2_buckets entry if
-  // that changes.
+  "kv_namespaces": [
+    { "binding": "SESSIONS", "id": "8c39c2864e30456d8dcc9fe2eb9e6314" },
+    { "binding": "RATELIMIT", "id": "e8c2dd383e2c4227bd6159d2149753fd" },
+    { "binding": "VAULT", "id": "13ae17b9d3e64a6a87745c62a2941e1d" }
+  ],
+  "r2_buckets": [
+    { "binding": "BACKUP", "bucket_name": "warnetech-server-backup" }
+  ],
   // Attaches testllm.warnetwork.cloud directly to this Worker (DNS + SSL
   // auto-provisioned by Cloudflare). warnetwork.cloud's zone already exists
-  // in this account, so unlike servtechworker's warnetwork.online this
-  // should attach cleanly on the next deploy with no zone setup needed.
+  // in this account, so this should attach cleanly on the next deploy with
+  // no zone setup needed.
   "routes": [
     { "pattern": "testllm.warnetwork.cloud", "custom_domain": true }
   ],

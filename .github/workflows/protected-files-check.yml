@@ -1,0 +1,68 @@
+name: protected-files-check
+
+# Required status check on main (plan §6.3).
+#
+# WHY pull_request_target AND NOT pull_request:
+#   `pull_request_target` makes GitHub evaluate this workflow from main's
+#   copy, never from the pull request's. That is the whole point. Under
+#   plain `pull_request`, a PR that edited this file would be judged by its
+#   own edited version — the agent could disable this check in the very
+#   change the check exists to stop. Under pull_request_target it cannot:
+#   main's unmodified version always runs first.
+#
+#   The usual danger of pull_request_target is that it grants secrets to
+#   untrusted forked code. That does not apply here: this job never checks
+#   out or executes PR content. It only asks the API which paths changed.
+#
+# This is the second of three layers. The other two are outside the repo
+# entirely, which is what makes them hold (plan §6.2):
+#   1. The agent's PAT lacks `workflows`, so GitHub itself rejects any
+#      commit touching .github/workflows/** regardless of this file.
+#   2. The PAT lacks `administration`, so the agent cannot relax branch
+#      protection to stop requiring this check.
+
+on:
+  pull_request_target:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  protected-files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for changes to protected paths
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Anything that, if the agent could edit it, would let the agent
+            // remove its own constraints.
+            const PROTECTED = [
+              'src/agent/guardrails.ts',   // the rules themselves + kill switch
+              'src/vault.ts',              // credential encryption
+              'wrangler.jsonc',            // bindings and secret declarations
+              '.github/workflows/',        // this gate and the deploy pipeline
+            ];
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              { owner: context.repo.owner, repo: context.repo.repo, pull_number: context.payload.pull_request.number },
+            );
+
+            const violations = files
+              .map(f => f.filename)
+              .filter(name => PROTECTED.some(p => p.endsWith('/') ? name.startsWith(p) : name === p));
+
+            if (violations.length > 0) {
+              core.setFailed(
+                'This pull request modifies protected files:\n' +
+                violations.map(v => `  - ${v}`).join('\n') +
+                '\n\nThese define the agent\'s own safety boundary and cannot be changed ' +
+                'by the autonomous self-modification pipeline. A human must make this ' +
+                'change directly. See plan §6.'
+              );
+            } else {
+              core.info(`Checked ${files.length} changed file(s); no protected paths touched.`);
+            }

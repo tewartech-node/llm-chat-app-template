@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WarNetech — Agent Governance</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --text: #e6edf3; --dim: #8b949e;
+    --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f8fa; --panel:#fff; --line:#d0d7de; --text:#1f2328; --dim:#656d76; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem;
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text);
+  }
+  header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+  h1 { font-size: 1.25rem; margin: 0; }
+  .updated { color: var(--dim); font-size: .85rem; }
+  .pill { padding: .2rem .6rem; border-radius: 999px; font-size: .8rem; font-weight: 600; }
+  .pill.ok { background: rgba(63,185,80,.15); color: var(--ok); }
+  .pill.degraded { background: rgba(210,153,34,.15); color: var(--warn); }
+  .pill.critical { background: rgba(248,81,73,.15); color: var(--bad); }
+  .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; }
+  h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin: 0 0 .75rem; }
+  .row { display: flex; justify-content: space-between; gap: 1rem; padding: .35rem 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row .label { color: var(--dim); overflow-wrap: anywhere; }
+  .val { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .val.ok { color: var(--ok); } .val.warn { color: var(--warn); } .val.bad { color: var(--bad); }
+  .bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: .3rem; }
+  .bar > i { display: block; height: 100%; background: var(--ok); }
+  .bar > i.warn { background: var(--warn); } .bar > i.bad { background: var(--bad); }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--dim); font-weight: 600; }
+  td.wrap { white-space: normal; min-width: 16rem; }
+  .empty { color: var(--dim); font-style: italic; }
+  footer { margin-top: 1.25rem; color: var(--dim); font-size: .8rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WarNetech Agent</h1>
+  <span id="status" class="pill">loading…</span>
+  <span class="updated" id="updated"></span>
+</header>
+
+<div class="grid">
+  <section><h2>Stores</h2><div id="stores"></div></section>
+  <section><h2>Connectors</h2><div id="connectors"></div></section>
+  <section><h2>Firewall (24h)</h2><div id="firewall"></div></section>
+  <section><h2>Free-tier headroom</h2><div id="quotas"></div></section>
+  <section><h2>Kill switch</h2><div id="kill"></div></section>
+  <section><h2>Scope drift</h2><div id="drift"></div></section>
+</div>
+
+<section style="margin-top:1rem">
+  <h2>Recent agent actions</h2>
+  <div class="scroll"><table id="actions">
+    <thead><tr><th>When</th><th>Connector</th><th>Action</th><th>OK</th><th>Rationale</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+</section>
+
+<footer>
+  Scope drift is <strong>alert-only</strong> by design — flagged here and by email, never auto-paused.
+  Refreshes every 30s.
+</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+function row(label, value, cls = "") {
+  return `<div class="row"><span class="label">${esc(label)}</span><span class="val ${cls}">${esc(value)}</span></div>`;
+}
+
+function renderHealth(h) {
+  $("status").textContent = h.status;
+  $("status").className = "pill " + h.status;
+  $("updated").textContent = "checked " + new Date(h.checkedAt).toLocaleTimeString();
+
+  $("stores").innerHTML = Object.entries(h.stores)
+    .map(([name, s]) => row(name, s.ok ? s.ms + " ms" : (s.error || "down"), s.ok ? "ok" : "bad"))
+    .join("") || '<p class="empty">No stores reported.</p>';
+
+  const conns = Object.entries(h.connectors || {});
+  $("connectors").innerHTML = conns.length
+    ? conns.map(([n, c]) => row(n, c.authenticated ? "authenticated" : "not authenticated", c.authenticated ? "ok" : "warn")).join("")
+    : '<p class="empty">No connectors reported.</p>';
+
+  const f = h.firewall;
+  $("firewall").innerHTML =
+    row("Threat events", f.recentThreats) +
+    row("Critical", f.criticalThreats, f.criticalThreats > 0 ? "bad" : "ok") +
+    row("Cached signatures", f.cachedSignatures, f.cachedSignatures > 0 ? "ok" : "warn");
+
+  $("quotas").innerHTML = (h.quotas || []).map((q) => {
+    const pct = Math.min(100, Math.round(q.fraction * 100));
+    const cls = pct >= 80 ? "bad" : pct >= 60 ? "warn" : "ok";
+    return row(q.ceiling, pct + "%  (" + q.used.toLocaleString() + " / " + q.limit.toLocaleString() + ")", cls)
+      + `<div class="bar"><i class="${cls}" style="width:${pct}%"></i></div>`;
+  }).join("") || '<p class="empty">No quota data.</p>';
+
+  $("kill").innerHTML = h.killSwitch.engaged
+    ? row("Engaged", h.killSwitch.reason || "no reason recorded", "bad")
+    : row("Released", "agent may act", "ok");
+
+  $("drift").innerHTML = row("Flagged actions", h.scopeDrift.recentFlagged, h.scopeDrift.recentFlagged > 0 ? "warn" : "ok");
+}
+
+function renderActions(rows) {
+  const body = document.querySelector("#actions tbody");
+  if (!Array.isArray(rows) || !rows.length) {
+    body.innerHTML = '<tr><td colspan="5" class="empty">No actions recorded yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.slice(0, 25).map((r) => `<tr>
+    <td>${esc(new Date(r.occurred_at).toLocaleString())}</td>
+    <td>${esc(r.connector)}</td>
+    <td>${esc(r.action)}</td>
+    <td class="${r.success ? "val ok" : "val bad"}">${r.success ? "yes" : "no"}</td>
+    <td class="wrap">${esc(r.decision)}</td>
+  </tr>`).join("");
+}
+
+async function refresh() {
+  try {
+    const h = await fetch("/api/agent/health").then((r) => r.json());
+    renderHealth(h);
+  } catch {
+    $("status").textContent = "unreachable";
+    $("status").className = "pill critical";
+  }
+  try {
+    renderActions(await fetch("/api/agent/audit-log?limit=25").then((r) => r.json()));
+  } catch {
+    /* leave the table as-is rather than blanking a usable view */
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

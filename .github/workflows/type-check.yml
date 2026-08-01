@@ -1,0 +1,25 @@
+name: type-check
+
+# Required status check on main (plan §6.3). Proves a change compiles and
+# would deploy — NOT that it is behaviourally correct. That gap is the
+# residual risk documented in plan §6.7, mitigated by automatic rollback
+# rather than pretended away.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - name: wrangler dry-run deploy
+        run: npx wrangler deploy --dry-run
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

@@ -1,7 +1,23 @@
 export interface Env {
   AI: Ai;
   ASSETS: Fetcher;
-  DB: D1Database; // warnetworkllm-db — users, messages, memories, shared_knowledge
+  DB: D1Database; // warnetech-server-data — users, messages, memories, shared_knowledge
+  SESSIONS: KVNamespace; // warnetech-server-sessions
+  RATELIMIT: KVNamespace; // warnetech-server-ratelimit
+  VAULT: KVNamespace; // warnetech-server-vault — encrypted connector credentials
+  BACKUP: R2Bucket; // warnetech-server-backup
+  // Secret — set via `wrangler secret put VAULT_ENCRYPTION_KEY` before first deploy.
+  // 32 random bytes, base64-encoded (e.g. `openssl rand -base64 32`). Used as an
+  // AES-256-GCM key to encrypt connector credentials at rest in VAULT.
+  VAULT_ENCRYPTION_KEY: string;
+  // Cloudflare Email Routing send binding, on mail.warnetwork.cloud.
+  // Optional so the Worker still boots before the domain is onboarded.
+  EMAIL?: SendEmail;
+  // Comma-separated allow-list of addresses whose mail is treated as a
+  // command. Set via `wrangler secret put AGENT_EMAIL_OWNER`. Envelope
+  // senders are forgeable, so this gates the channel but is not auth —
+  // see the guardrail note in src/agent/email.ts.
+  AGENT_EMAIL_OWNER?: string;
 }
 
 export interface ChatMessage {

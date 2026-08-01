@@ -1,7 +1,24 @@
 /**
- * LLM Chat Application — now backed by warnetworkllm-db (D1)
+ * LLM Chat Application — now backed by warnetech-server-data (D1)
  */
 import { Env, ChatMessage } from "./types";
+import {
+  authenticateConnector,
+  deauthenticateConnector,
+  executeConnectorAction,
+  getConnectorStatus,
+} from "./connectors/index";
+import { handleTask, runDueScheduledTasks } from "./agent/core";
+import { buildHealthReport } from "./agent/health";
+import { keepaliveSupabase } from "./agent/quota";
+import { refreshCache } from "./agent/firewall/signatures";
+import { handleInboundEmail } from "./agent/email";
+import {
+  engageKillSwitch,
+  isKillSwitchEngaged,
+  killSwitchReason,
+  releaseKillSwitch,
+} from "./agent/guardrails";
 
 const MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const SYSTEM_PROMPT =
@@ -36,9 +53,149 @@ export default {
       if (request.method === "POST") return handleAddMemory(request, url, env);
     }
 
+    if (url.pathname === "/api/connectors/auth" && request.method === "POST") {
+      return handleConnectorAuth(request, env);
+    }
+
+    if (url.pathname === "/api/connectors/status" && request.method === "GET") {
+      return handleConnectorStatus(env);
+    }
+
+    const executeMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9-]+)\/execute$/);
+    if (executeMatch && request.method === "POST") {
+      return handleConnectorExecute(request, env, executeMatch[1]);
+    }
+
+    const deauthMatch = url.pathname.match(/^\/api\/connectors\/([a-z0-9-]+)\/auth$/);
+    if (deauthMatch && request.method === "DELETE") {
+      await deauthenticateConnector(env, deauthMatch[1]);
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    if (url.pathname === "/api/agent/task" && request.method === "POST") {
+      return handleAgentTask(request, env);
+    }
+
+    if (url.pathname === "/api/agent/audit-log" && request.method === "GET") {
+      return handleAuditLog(env, url);
+    }
+
+    if (url.pathname === "/api/agent/learnings" && request.method === "GET") {
+      return handleLearnings(env);
+    }
+
+    if (url.pathname === "/api/agent/health" && request.method === "GET") {
+      const report = await buildHealthReport(env);
+      return json(report, report.status === "critical" ? 503 : 200);
+    }
+
+    if (url.pathname === "/api/agent/capabilities" && request.method === "GET") {
+      const res = await executeConnectorAction(env, "supabase", "select", {
+        table: "agent_capabilities",
+        select: "name,version,description,added_via,source_pr_url,added_at,status",
+        order: "added_at.desc",
+        limit: 200,
+      });
+      return json(res.success ? res.data : { error: res.error }, res.success ? 200 : 502);
+    }
+
+    if (url.pathname === "/api/agent/kill-switch") {
+      if (request.method === "GET") {
+        return json({
+          engaged: await isKillSwitchEngaged(env),
+          reason: await killSwitchReason(env),
+        });
+      }
+      if (request.method === "POST") {
+        const body = (await request.json().catch(() => ({}))) as { engage?: boolean; reason?: string };
+        if (body.engage) await engageKillSwitch(env, body.reason ?? "engaged via API");
+        else await releaseKillSwitch(env);
+        return json({ engaged: await isKillSwitchEngaged(env) });
+      }
+    }
+
     return new Response("Not found", { status: 404 });
   },
+
+  /**
+   * Cron-driven proactive work. Scheduled tasks run through the same
+   * handleTask() guardrail path as interactive requests — see agent/core.ts
+   * for why this is a Worker Cron Trigger rather than pg_cron.
+   */
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      (async () => {
+        // Keepalive first and independently — a free Supabase project pauses
+        // after 7 days of low activity, which would take everything else with
+        // it, so this must not be skipped because a later step threw.
+        await keepaliveSupabase(env).catch((e) => console.error("Supabase keepalive failed:", e));
+        await refreshCache(env).catch((e) => console.error("Signature cache refresh failed:", e));
+        await runDueScheduledTasks(env).catch((e) => console.error("Scheduled task run failed:", e));
+      })(),
+    );
+  },
+
+  /**
+   * Inbound mail on mail.warnetwork.cloud. Delegates immediately — the
+   * sender allow-list and the "body is data, not instruction" rule both live
+   * in agent/email.ts, and commands run the normal guardrail chain.
+   */
+  async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      handleInboundEmail(message, env).catch((e) => console.error("Inbound email failed:", e)),
+    );
+  },
 } satisfies ExportedHandler<Env>;
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function handleAgentTask(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    task?: string;
+    confirmed?: boolean;
+    dryRun?: boolean;
+    actor?: string;
+  };
+  if (!body.task) return json({ error: "task is required" }, 400);
+
+  const outcome = await handleTask(env, body.task, {
+    confirmed: body.confirmed,
+    dryRun: body.dryRun,
+    source: "api",
+    actor: body.actor,
+  });
+
+  return json(outcome, outcome.success ? 200 : 400);
+}
+
+async function handleAuditLog(env: Env, url: URL): Promise<Response> {
+  const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
+  const res = await executeConnectorAction(env, "supabase", "select", {
+    table: "agent_actions",
+    select: "id,task,decision,connector,action,result,success,cost,source,occurred_at",
+    order: "occurred_at.desc",
+    limit,
+  });
+  return json(res.success ? res.data : { error: res.error }, res.success ? 200 : 502);
+}
+
+async function handleLearnings(env: Env): Promise<Response> {
+  const res = await executeConnectorAction(env, "supabase", "select", {
+    table: "learned_patterns",
+    filters: { pattern_domain: "eq.agent" },
+    select: "pattern_name,pattern_description,confidence_score,success_rate,times_applied,times_successful",
+    order: "confidence_score.desc",
+    limit: 100,
+  });
+  return json(res.success ? res.data : { error: res.error }, res.success ? 200 : 502);
+}
 
 function normalizeUsername(raw: string | null): string | null {
   if (!raw) return null;
@@ -122,7 +279,7 @@ async function handleChatRequest(request: Request, url: URL, env: Env): Promise<
     const inputs = { messages, max_tokens: 1024, stream: true };
     const aiStream = await env.AI.run(MODEL_ID, inputs, {});
 
-    const [clientStream, saveStream] = (aiStream as ReadableStream).tee();
+    const [clientStream, saveStream] = (aiStream as unknown as ReadableStream).tee();
     saveAssistantReply(saveStream, env, username).catch((e) =>
       console.error("Failed to save assistant reply:", e),
     );
@@ -227,6 +384,98 @@ async function handleAddMemory(request: Request, url: URL, env: Env): Promise<Re
     .bind(fact, username)
     .run();
   return new Response(JSON.stringify({ ok: true, fact }), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
+const RATE_LIMIT_PER_MINUTE = 10;
+
+/**
+ * Fixed-window rate limit backed by RATELIMIT KV — one counter per connector
+ * per UTC minute. KV writes aren't strongly consistent, so this is a soft
+ * limit (occasional over-counts under concurrency), which is fine for a
+ * guardrail whose job is "slow down a runaway loop," not hard billing enforcement.
+ */
+async function checkRateLimit(env: Env, bucket: string): Promise<boolean> {
+  const minuteKey = `${bucket}:${Math.floor(Date.now() / 60000)}`;
+  const current = parseInt((await env.RATELIMIT.get(minuteKey)) ?? "0", 10);
+  if (current >= RATE_LIMIT_PER_MINUTE) return false;
+  await env.RATELIMIT.put(minuteKey, String(current + 1), { expirationTtl: 70 });
+  return true;
+}
+
+async function logConnectorCall(
+  env: Env,
+  connector: string,
+  action: string,
+  params: Record<string, unknown>,
+  success: boolean,
+  error?: string,
+) {
+  await env.DB.prepare(
+    "INSERT INTO connector_audit_log (connector, action, params_json, success, error, source) VALUES (?, ?, ?, ?, ?, ?)",
+  )
+    .bind(connector, action, JSON.stringify(params), success ? 1 : 0, error ?? null, "api")
+    .run()
+    .catch((e) => console.error("Failed to write connector audit log:", e));
+}
+
+async function handleConnectorAuth(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as {
+    connector?: string;
+    credentials?: Record<string, string>;
+  };
+  if (!body.connector || !body.credentials) {
+    return new Response(JSON.stringify({ error: "connector and credentials are required" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  const result = await authenticateConnector(env, body.connector, body.credentials);
+  if (!result.ok) {
+    return new Response(JSON.stringify({ error: result.error }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return new Response(JSON.stringify({ ok: true, connector: body.connector }), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function handleConnectorStatus(env: Env): Promise<Response> {
+  const status = await getConnectorStatus(env);
+  return new Response(JSON.stringify(status), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function handleConnectorExecute(request: Request, env: Env, connectorName: string): Promise<Response> {
+  const allowed = await checkRateLimit(env, `connectors:${connectorName}`);
+  if (!allowed) {
+    return new Response(JSON.stringify({ error: "rate_limited", limit: RATE_LIMIT_PER_MINUTE }), {
+      status: 429,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  const body = (await request.json().catch(() => ({}))) as {
+    action?: string;
+    params?: Record<string, unknown>;
+  };
+  if (!body.action) {
+    return new Response(JSON.stringify({ error: "action is required" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  const params = body.params ?? {};
+
+  const result = await executeConnectorAction(env, connectorName, body.action, params);
+  await logConnectorCall(env, connectorName, body.action, params, result.success, result.error);
+
+  return new Response(JSON.stringify(result), {
+    status: result.success ? 200 : 400,
     headers: { "content-type": "application/json" },
   });
 }

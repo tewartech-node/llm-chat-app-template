@@ -9,6 +9,9 @@ import {
   getConnectorStatus,
 } from "./connectors/index";
 import { handleTask, runDueScheduledTasks } from "./agent/core";
+import { buildHealthReport } from "./agent/health";
+import { keepaliveSupabase } from "./agent/quota";
+import { refreshCache } from "./agent/firewall/signatures";
 import {
   engageKillSwitch,
   isKillSwitchEngaged,
@@ -82,6 +85,21 @@ export default {
       return handleLearnings(env);
     }
 
+    if (url.pathname === "/api/agent/health" && request.method === "GET") {
+      const report = await buildHealthReport(env);
+      return json(report, report.status === "critical" ? 503 : 200);
+    }
+
+    if (url.pathname === "/api/agent/capabilities" && request.method === "GET") {
+      const res = await executeConnectorAction(env, "supabase", "select", {
+        table: "agent_capabilities",
+        select: "name,version,description,added_via,source_pr_url,added_at,status",
+        order: "added_at.desc",
+        limit: 200,
+      });
+      return json(res.success ? res.data : { error: res.error }, res.success ? 200 : 502);
+    }
+
     if (url.pathname === "/api/agent/kill-switch") {
       if (request.method === "GET") {
         return json({
@@ -107,7 +125,14 @@ export default {
    */
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
-      runDueScheduledTasks(env).catch((e) => console.error("Scheduled task run failed:", e)),
+      (async () => {
+        // Keepalive first and independently — a free Supabase project pauses
+        // after 7 days of low activity, which would take everything else with
+        // it, so this must not be skipped because a later step threw.
+        await keepaliveSupabase(env).catch((e) => console.error("Supabase keepalive failed:", e));
+        await refreshCache(env).catch((e) => console.error("Signature cache refresh failed:", e));
+        await runDueScheduledTasks(env).catch((e) => console.error("Scheduled task run failed:", e));
+      })(),
     );
   },
 } satisfies ExportedHandler<Env>;
